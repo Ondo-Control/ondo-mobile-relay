@@ -39,7 +39,7 @@ test('unapproved device/relay/action paths fail closed even with forged authoriz
  }
 });
 test('strict MCP parsing/limits and unknown routes',async()=>{
- for(const args of [{enable:true},{target:'private'},null,[],{__proto__:'no'}]){
+ for(const args of [{enable:true},{target:'private'},null,[],JSON.parse('{"__proto__":"no"}')]){
   const r=(await rpc('tools/call',{name:'ondo_jarvis_transport_info',arguments:args})).body;
   assert.equal(r.error.code,-32602);
  }
