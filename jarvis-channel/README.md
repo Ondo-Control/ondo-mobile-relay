@@ -26,9 +26,13 @@ im normalen ChatGPT-iPhone-Chat bereit.
    `ondo-jarvis-independent`, keine bestehenden Skripte überschreiben.
 3. **Nie ein API-Token in diesen Chat, in Issues oder GitHub-Code einfügen.**
    Für automatisches Deployment einen kurzlebigen, auf das nötige Cloudflare-Konto
-   beschränkten Token **direkt in GitHub Actions Secret**
-   `ONDO_JARVIS_CF_DEPLOY_TOKEN` hinterlegen. Die nicht geheime Cloudflare
-   Account-ID als Actions-Variable `ONDO_JARVIS_CF_ACCOUNT_ID`.
+   beschränkten Token **nur als GitHub Environment Secret** im Environment
+   `ondo-jarvis-independent` unter `ONDO_JARVIS_CF_DEPLOY_TOKEN` hinterlegen.
+   Die nicht geheime Cloudflare Account-ID als Environment-Variable
+   `ONDO_JARVIS_CF_ACCOUNT_ID`. Environment auf Deployment-Branch `main`
+   beschränken und nach Möglichkeit einen Required Reviewer aktivieren.
+   **Kein gewöhnliches Repository-Secret**: andere Workflows dieses
+   öffentlichen Repositories sollen das Token nicht lesen können.
    Wegen der **Neuanlage** eines Workers können laut Cloudflare einmalig weitergehende
    Workers-Admin-Rechte erforderlich sein; diese danach sofort entziehen.
 4. GitHub Actions-Workflow `Deploy independent ONDO JARVIS Worker (manual)`
