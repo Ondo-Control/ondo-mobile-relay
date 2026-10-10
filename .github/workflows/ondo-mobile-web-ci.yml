@@ -25,3 +25,7 @@ jobs:
           node --check mobile-web/worker.mjs
           node --check mobile-web/worker.test.mjs
           node --test mobile-web/worker.test.mjs
+          node --check mobile-web/p3/native_core.mjs
+          node --check mobile-web/p3/endpoint_bridge.mjs
+          node --check mobile-web/p3/transport.mjs
+          node --test mobile-web/p3/transport.test.mjs
