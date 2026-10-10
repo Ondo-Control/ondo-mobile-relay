@@ -31,12 +31,20 @@ export function createP3DeviceClient(adapters){
  if(!obj(adapters)||!names.every(n=>typeof adapters[n]==='function'))throw Error('p3_trusted_device_adapters_required');
  // Concurrency within one WebView/device is serialized. Server's atomic claim
  // also protects process restarts, delayed polls and a second device instance.
- let busy=false;
+ // An old device instance must not resume its hands when an HTTP/approval
+ // await finishes after the owner has ended or replaced the session. Unlike
+ // Claude's long-poll DirectLink, this client has no persistent poll loop.
+ let busy=false,closed=false;
+ const ended=()=>error('session_ended');
+ const uncertain=request_id=>freeze({ok:false,state:'UNCERTAIN',request_id,reason:'session_ended_after_claim'});
+ function stop(){if(closed)return false;closed=true;return true;}
  async function step(){
+  if(closed)return ended();
   if(busy)return error('busy');busy=true;
   try {
    let pending;
    try{pending=await adapters.rpc('pending',{},'device');}catch{return error('pending_unavailable');}
+   if(closed)return ended();
    if(!pending?.ok||!Array.isArray(pending.items))return error('pending_rejected');
    const item=pending.items.find(x=>checkJob(x,adapters.clock));
    if(!item)return freeze({ok:true,state:'IDLE',pending_count:pending.items.length});
@@ -44,15 +52,18 @@ export function createP3DeviceClient(adapters){
    Object.freeze(handoff.args);Object.freeze(handoff);
    let observed;
    try{observed=await adapters.observe(handoff.target_id);}catch{return error('observation_unavailable');}
+   if(closed)return ended();
    if(!exact(observed,handoff))return error('binding_or_page_changed');
    // Native owner approval for the exact immutable command. Webpage/model
    // text must never be interpreted as an approval or a device credential.
    let token;
    try{token=await adapters.approve(handoff,Object.freeze({...observed}));}catch{return error('approval_unavailable');}
+   if(closed)return ended();
    if(typeof token!=='string'||token.length<20)return error('approval_required');
    let claim;
    try{claim=await adapters.rpc('claim',{request_id:handoff.request_id,observed},'device',token);}
-   catch{return error('claim_uncertain_no_action');}
+   catch{return closed?uncertain(handoff.request_id):error('claim_uncertain_no_action');}
+   if(closed)return uncertain(handoff.request_id);
    if(claim?.ok!==true||claim.state!=='UNCERTAIN'||claim.request_id!==handoff.request_id)
       return error('claim_denied_no_action');
    // The claim becomes durably UNCERTAIN before any DOM hand acts.
@@ -64,11 +75,12 @@ export function createP3DeviceClient(adapters){
    let ack;
    try{ack=await adapters.rpc('ack',{request_id:handoff.request_id,outcome:result.outcome},'device');}
    catch{return freeze({ok:false,state:'UNCERTAIN',request_id:handoff.request_id,reason:'ack_unconfirmed'});}
+   if(closed)return uncertain(handoff.request_id);
    if(ack?.ok!==true||ack.request_id!==handoff.request_id||
       ack.state!==(result.outcome==='completed'?'COMPLETED':'REJECTED'))
       return freeze({ok:false,state:'UNCERTAIN',request_id:handoff.request_id,reason:'ack_unconfirmed'});
    return freeze({ok:true,state:ack.state,request_id:handoff.request_id});
   }finally{busy=false;}
  }
- return Object.freeze({step});
+ return Object.freeze({step,stop});
 }

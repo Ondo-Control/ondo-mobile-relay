@@ -55,3 +55,40 @@ test('concurrent device instances: server claim chooses at most one',async()=>{
  assert.equal(all.filter(r=>r.state==='COMPLETED').length,1);
  assert.equal(f.counters.performed,1);
 });
+
+// Regression from independent iPhone DirectLink evidence: no stale client
+// may perform a late mutation after stop. Never infer a second send from timeout.
+test('stopped client rejects new steps; late pending response creates no hand',async()=>{
+ const f=fixture();let release,reached;
+ const arrived=new Promise(resolve=>reached=resolve);
+ f.adapters.rpc=async(tool)=>{assert.equal(tool,'pending');reached();return new Promise(resolve=>release=resolve);};
+ const client=createP3DeviceClient(f.adapters),running=client.step();
+ await arrived;assert.equal(client.stop(),true);assert.equal(client.stop(),false);
+ release({ok:true,items:[item()]});
+ assert.equal((await running).reason,'session_ended');
+ assert.equal((await client.step()).reason,'session_ended');
+ assert.deepEqual(f.counters,{claimed:0,performed:0,approved:0,ack:0});
+});
+test('owner stop during approval forbids subsequent claim and action',async()=>{
+ const f=fixture();let release,reached;
+ const arrived=new Promise(resolve=>reached=resolve);
+ f.adapters.approve=async()=>{reached();return new Promise(resolve=>release=resolve);};
+ const client=createP3DeviceClient(f.adapters),running=client.step();
+ await arrived;client.stop();release('signed-approved-action-jwt');
+ assert.equal((await running).reason,'session_ended');
+ assert.equal(f.counters.claimed,0);assert.equal(f.counters.performed,0);
+});
+test('stop during in-flight claim is UNCERTAIN and performs no action',async()=>{
+ const f=fixture();let release,reached;
+ const arrived=new Promise(resolve=>reached=resolve),original=f.adapters.rpc;
+ f.adapters.rpc=async(tool,...args)=>{
+  if(tool==='claim'){reached();return new Promise(resolve=>release=resolve);}
+  return original(tool,...args);
+ };
+ const client=createP3DeviceClient(f.adapters),running=client.step();
+ await arrived;client.stop();release({ok:true,state:'UNCERTAIN',request_id:'r1'});
+ const result=await running;
+ assert.equal(result.state,'UNCERTAIN');assert.equal(result.reason,'session_ended_after_claim');
+ assert.equal(result.request_id,'r1');assert.equal(f.counters.performed,0);
+ assert.equal(f.counters.ack,0);
+});

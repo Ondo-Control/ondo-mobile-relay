@@ -39,3 +39,5 @@ jobs:
           node --check mobile-web/p3/device_binding_adapter.mjs
           node --test mobile-web/p3/identity_issuer.test.mjs
           node --test mobile-web/p3/device_binding_adapter.test.mjs
+          node --check mobile-web/p3/device_inspect.test.mjs
+          node --test mobile-web/p3/device_inspect.test.mjs
