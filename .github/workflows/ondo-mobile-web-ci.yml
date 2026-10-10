@@ -31,3 +31,6 @@ jobs:
           node --test mobile-web/p3/transport.test.mjs
           node --check mobile-web/p3/device_client.mjs
           node --test mobile-web/p3/device_client.test.mjs
+          node mobile-web/p3/build_scriptable_device.cjs
+          node --check mobile-web/p3/device_client_scriptable.js
+          node --test mobile-web/p3/scriptable_smoke.test.cjs
