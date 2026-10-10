@@ -1,4 +1,23 @@
-## P3-Native-Core eingebunden – ChatGPT-eigener Arbeitsstand 10.10.2026
+## AKTUELLER P3-QUELLSTAND – 10.10.2026: Identity/Device (verbindlich; ältere Abschnitte historisch)
+
+**Einziger aktueller Code-/Prüfstand:** Repo `Ondo-Control/ondo-mobile-relay`, Branch **`ondo-work/mobile-p3-trusted-gates-20261010`**, unabhängig geprüfter Code-Commit **`f113424c8d582f9f3fad483e39a0d10ec70db877`** (Parent `9e900e21ec2a465fc730239b7ab74901cd5a6012`). Enthält die vorherige `mobile-web`-P3-Integration **vollständig**. **GitHub Actions 32/32 Node-/Fixture-/Syntax-PASS**: <https://github.com/Ondo-Control/ondo-mobile-relay/actions/runs/38070060595>; frühere 9/17/20er Tests in dieser README sind ausschließlich historische Zwischenstände. Stage-B **NICHT** deployed und **kein** Live-iPhone-/Plugin-PASS.
+
+**Was existiert – direkt am bestehenden ChatGPT-Kanal `mobile-web/`:**
+- `p3/native_core.mjs`, `p3/endpoint_bridge.mjs`: vorhandener gehärteter P3-Kern + geprüfte Modell-/Geräterollen.
+- `p3/transport.mjs`, `worker.mjs`: getrennte, derzeit deaktivierte `POST /p3/model` / `POST /p3/phone`-Routen, JWT-Verifikation, P3-Kern-Dispatcher. Das öffentliche `/mcp` bleibt beim alten Status-Tool, ist **kein** persönliches Stage-B-Plugin.
+- `wrangler.jsonc`: **nur im Quellcode** SQLite-Durable-Object-Klasse `P3Session` und Binding `P3_SESSIONS`. Der reale Cloudflare-Worker `ondo-mobile-web` hat derzeit **keine** DO-Bindung.
+- `p3/device_client.mjs`, `p3/build_scriptable_device.cjs`: Claim-vor-DOM-Aktion, No-Replay bei UNCERTAIN, generierbarer Scriptable-RPC-Adapter; **noch nicht** in einem realen installierten ONDO-Scriptable-Bundle verbunden.
+- `p3/identity_issuer.mjs`: maximal 60 Sekunden gültige ES256-Owner-/Controller-/Chat-/Geräte-/Action-Token-Logik, aber **nur** an noch zu implementierende **vertrauenswürdige** Host-/Device-/Human-Approval-Attester gebunden. Ein `verified:true` aus einem Tool-Argument/HTTP-Body oder `_meta["openai/session"]` allein ist **kein** Identitätsbeweis.
+- `p3/device_binding_adapter.mjs`: erneute native Seiten-/Origin-/Route-/Conversation-/Epoch-/State-Prüfung nach Claim; `performAtomic` muss im **selben echten WebView-JavaScript-Task** die exakte Bindung vor dem Handgriff prüfen. Der echte Scriptable-WKWebView-Adapter ist noch OFFEN.
+- `p3/*.test.*`: 32/32 Fixture-Tests, kein Realgerät-/Cloudflare-DO-/MCP-Host-End-to-End-Test.
+
+**Genaue Trennung:** Claude besitzt Cloudflare-`ondo-relay` und Root-`worker.js` / Root-`wrangler.jsonc` im `main` dieses gemeinsamen Repos. Sie werden von diesem ChatGPT-Integrationszweig **nicht verändert**. ChatGPT betreibt getrennt den **aktuell noch isolierten Cloudflare-Worker `ondo-mobile-web`** (<https://ondo-mobile-web.n4rtvfvj96.workers.dev/>). Das persönliche **`ONDO P3`-Plugin** unter `ondo-p3.bz5p4cqjdn.chatgpt.site` ist eine dritte, noch **Stage-A-only** Runtime mit ausschließlich `ondo_capability_ping` (`device_access=false`, `relay_connected=false`). Ein Push nach GitHub aktiviert kein Plugin und keine Cloudflare-Änderung.
+
+**Einziger nächste technischer Schwerpunkt:** Den echten vertrauenswürdigen Host-/Owner-/Chat-/Controller-/Origin-Identitätsnachweis **innerhalb des bestehenden persönlichen P3-Plugin-Hosts** und seinen Stage-B-MCP-Tool-Aktivierungsweg belegen. Anschließend gezielt Gerätepaarung/Owner-Approval, echtes `performAtomic`, persistente `P3_SESSIONS`-Speicherung und reale `p3lab` + separat freigegebene `google.com`-Live-End-to-End-Tests durchführen. **Ohne** konkrete Deployment-/Billing-/Installationsfreigabe kein Live-Deploy, kein Secret-Lesen, keine Mutation an Claudes produktivem Relay. Workspace-first, eine qualifizierte Source-Lieferung und vollständige aktuelle Projektkoordination in `Ondo-Control/ondo-hub@main:ONDO_PROJECT_CONTEXT.md`, `START_HERE.md`, `STATUS.md`. Diese README ist die **einzige** produktnahe Entwicklungsnotiz; keine zusätzliche FINAL-/HANDOVER-Datei.
+
+---
+
+## Historische P3-Native-Core-Integration – Stand früher am 10.10.2026
 
 ### iPhone-Geräteclient + SQLite-Konfiguration (10.10.2026, Quellkandidat)
 
