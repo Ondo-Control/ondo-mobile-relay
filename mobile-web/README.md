@@ -1,5 +1,18 @@
 ## P3-Native-Core eingebunden – ChatGPT-eigener Arbeitsstand 10.10.2026
 
+### iPhone-Geräteclient + SQLite-Konfiguration (10.10.2026, Quellkandidat)
+
+Der bestehende Stage-B-Integrationsbranch `ondo-work/mobile-web-p3-integration-20261010` enthält nun zusätzlich:
+
+- `mobile-web/p3/device_client.mjs`: **iPhone-seitiger, einmaliger** Transportdurchlauf `pending → observe → approve → claim → perform → ack`. Die Geräteaktion wird erst nach gültiger, serverseitiger `UNCERTAIN`-Claimantwort ausgeführt. Unklare Claimantwort: keinerlei Aktion. Unklarer Perform-/ACK-Ausgang: keinerlei Replay.
+- `mobile-web/p3/build_scriptable_device.cjs`: generiert eine Scriptable-`importModule`-fähige CommonJS-`device_client_scriptable.js` aus derselben Quelle, ohne gespeicherte Tokens. Ihre RPC-Funktion ist fest an die **ChatGPT-eigene** `https://ondo-mobile-web.n4rtvfvj96.workers.dev`-URL gebunden und verweigert Netzaufrufe ohne vom vertrauenswürdigen Host ausgestellte Geräteberechtigung. **Kein fertiges ausführbares ONDO-Gesamtprodukt.**
+- `mobile-web/wrangler.jsonc`: nur auf diesem getrennten Arbeitsbranch wurde `P3_SESSIONS` als SQLite-basiertes Durable Object der eigenen Klasse `P3Session` (`new_sqlite_classes`) ergänzt. **KEIN Deployment / keine Datenbankmigration in Cloudflare erfolgt.** Aktive Worker-Fassung bleibt isoliert.
+- `device_client.test.mjs` (8 Fälle), `scriptable_smoke.test.cjs` (2 Fälle), `config_contract.test.cjs` (1 Fall) ergänzen die bisherigen 9 Tests. Aktueller unabhängiger GitHub-CI-Nachweis: <https://github.com/Ondo-Control/ondo-mobile-relay/actions/runs/38034493865> **20/20 PASS** (5+4+8+2+1), keine echte iPhone- oder Cloudflare-DO-Abnahme.
+
+**Weiterer echter Aktivierungsblocker:** `P3_IDENTITY_PUBLIC_JWK` ist nicht mit einem vertrauenswürdigen, owner-/chat-/device-gebundenen persönlichen Plugin-/Host-Aussteller verbunden. Der native iPhone-Driver setzt `observe`, `approve`, `perform` und gültige kurzlebige Token vom echten P3-/Geräte-Sicherheitsadapter voraus; diese Quelle kann sie nicht selbst legitim aus Webseiten-/Modelltext erzeugen. Ohne diese Voraussetzungen kein Live-Gerätezugriff. Das persönliche `ONDO P3`-Plugin läuft bislang nur Stage A. Claude-`ondo-relay`, Root-`worker.js`/`wrangler.jsonc` sowie sämtliche Cloudflare-Produkte sind durch diese Source-/CI-Arbeit **unverändert**. Kein unautorisierter Deployment- oder Billing-Wechsel.
+
+
+
 **Quell-Branch:** `ondo-work/mobile-web-p3-integration-20261010` (aus `ondo-work/mobile-web-20261009` beim HEAD `f221a9707872f7b13672e2fa72ca256f238ec986`).
 **Wichtig: KEIN produktives Deployment, KEIN Live-Gerätezutritt.** Der laufende Cloudflare-Worker `ondo-mobile-web` bleibt in der zuletzt bereitgestellten isolierten Fassung. Diese Änderungen sind ein **neuer getesteter Arbeitsbranch**, nicht mit GitHub-`main` gemergt.
 
