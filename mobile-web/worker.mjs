@@ -1,3 +1,6 @@
+// Integrated P3 transport remains inert until the trusted issuer and session DO are configured.
+import {p3HttpGateway} from './p3/transport.mjs';
+export {P3Session} from './p3/transport.mjs';
 // ONDO Mobile isolated Cloudflare Worker. This is NOT ONDO P3 device access.
 // Importantly this worker does not import the existing ondo-mobile-relay worker.
 // No token, device, chat, private page, browser or outside network is read.
@@ -67,7 +70,9 @@ async function mcp(request){
  return response({jsonrpc:'2.0',id,result});
 }
 export default {
- async fetch(request){
+ async fetch(request,env){
+  const p3=await p3HttpGateway(request,env);
+  if(p3!==null)return p3;
   const url=new URL(request.url);
   if(url.search||url.hash)return response({error:'not_found'},404);
   if(request.method==='GET'&&url.pathname==='/')
