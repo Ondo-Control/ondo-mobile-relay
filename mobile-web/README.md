@@ -1,3 +1,31 @@
+## P3-Native-Core eingebunden – ChatGPT-eigener Arbeitsstand 10.10.2026
+
+**Quell-Branch:** `ondo-work/mobile-web-p3-integration-20261010` (aus `ondo-work/mobile-web-20261009` beim HEAD `f221a9707872f7b13672e2fa72ca256f238ec986`).
+**Wichtig: KEIN produktives Deployment, KEIN Live-Gerätezutritt.** Der laufende Cloudflare-Worker `ondo-mobile-web` bleibt in der zuletzt bereitgestellten isolierten Fassung. Diese Änderungen sind ein **neuer getesteter Arbeitsbranch**, nicht mit GitHub-`main` gemergt.
+
+**Getrennte Systeme (Owner-Vorgabe):**
+- **Claude:** Cloudflare `ondo-relay`, Root-`worker.js` / Root-`wrangler.jsonc` aus `Ondo-Control/ondo-mobile-relay`, Claudes ONDO-Mobile-Version – **nicht angefasst**.
+- **ChatGPT:** Cloudflare `ondo-mobile-web`, Source **`mobile-web/`** auf eigenem Branch. Persönliches `ONDO P3` (private `chatgpt.site`) ist nochmals separat und weiterhin Stage A.
+- Gemeinsamer GitHub-Repositoryname ist keine Betriebs-/Schreibfreigabe für Claudes Relay.
+
+**Konkrete neue Stage-B-Module:**
+- `p3/native_core.mjs`: Quelle aus dem existierenden, gehärteten `ondo-hub/hosting/ondo-p3/architecture/p3_native_channel.cjs`, Commit `e53c303fbd6c59f2a26090cc5817a8c0ba61fadf`, unveränderte Native-Funktionslogik, nur CommonJS-Export → ESM.
+- `p3/endpoint_bridge.mjs`: Quelle aus dem existierenden P3-Endpunktadapter desselben Commits, unveränderte Funktionslogik, nur Export umgestellt.
+- `p3/transport.mjs`: Konkrete Worker-Routen `POST /p3/model` und `POST /p3/phone`, getrennte Rollen, signierte ES256-Einmal-Freigabeattestierungen (max. 300 Sekunden Laufzeit) und sessionbezogene Durable-Object-Transaktionslogik. Exakte origin/chat/device/session-Prüfung über den übernommenen P3-Core. Modell: `state/offer/status`; Gerät: `begin/publish/pending/claim/ack/revoke`. Ack/Claim und Mutationen niemals öffentlich oder für Controllerrolle. `offer` stellt nur einen wartenden Auftrag ein; die atomare Übernahme vor einer Geräteaktion ist `UNCERTAIN`, **kein automatischer Replay**.
+- `mobile-web/worker.mjs`: Bestehende Web-/MCP-Status-Routen erhalten; P3-Gateway als eigener optionaler Router in genau diesen Worker eingebunden, ohne Claudes Root-`worker.js` zu laden.
+
+**Sicheres Default-Deny:** Solange **beide** vertrauenswürdigen Hostbindungen fehlen (`P3_IDENTITY_PUBLIC_JWK`, `P3_SESSIONS` Durable-Object-Namespace), erhält `POST /p3/model`/`/p3/phone` `503 p3_not_provisioned`. Falsche/unsignierte Rolle erhält `403 attestation_required`. Der öffentliche `/mcp` stellt weiterhin **nur** `ondo_mobile_transport_info` bereit. Die existierende P3-`chatgpt.site`-App ist nicht mit dem Worker verbunden; ein neues Site-Werkzeug wird durch diesen Branch allein NICHT freigeschaltet.
+
+**Sicherheits- und Vertrauensgrenze:** Der Host, der `P3_IDENTITY_PUBLIC_JWK` vertrauenswürdig bereitstellt, MUSS die signierten Session-/Controller-/Chat-/Origin-/Device-/Owner-Grants tatsächlich geprüft haben; `_meta.openai/session`, Modell-Tool-Parameter oder Webseiteninhalte sind **keine** ausreichende Attestierung. Die in Fixture-Tests lokal erzeugten ECDSA-Schlüssel sind ausschließlich ephemere Testdaten, keine produktiven Zugangsdaten und werden nicht committed. Geräteseitige native Freigabe muss vor Ausgabe eines `approved_action.digest` den exakten Auftrag und die aktuell gebundene Seite prüfen. Der Worker verweigert zusätzlich unzulässige Aktionen. Bis ein echter vertrauenswürdiger Attester und native iPhone-Client existieren, Stage B NICHT deployen oder zu Live-PASS erklären.
+
+**Speicher-Grenze:** `P3_SESSIONS` ist ein noch **nicht provisioniertes** Durable-Object-Binding; die Implementierung erwartet die echte Cloudflare-`state.storage.transaction`-API. Es wurden bewusst weder Cloudflare-Objekte angelegt noch eine kostenrelevante Migration ausgelöst. Vor Produktivschaltung Free-Limits, Speicher- und Löschkonzept, unabhängigen Cloudflare-DO-Integrationstest und widerrufbare Owner-Grants prüfen. Live-Scriptable-Lifecycle und gehosteter ChatGPT-Controller ebenfalls offen.
+
+**Testbeweis:** Neues `mobile-web/p3/transport.test.mjs` enthält signierte P3-/Durable-Object-**Mock**-Tests. Die unveränderten 5 Web-/MCP-Tests und 4 neue Stage-B-Rollentests sind zusammen **9/9 GitHub-CI-PASS**: <https://github.com/Ondo-Control/ondo-mobile-relay/actions/runs/38033077859>. 6 zusätzliche ausführliche lokale Mock-Tests wurden vor dem GitHub-Schreiben geprüft. Kein echter iPhone-, Cloudflare-DO- oder Plugin-End-to-End-PASS.
+
+**Nächste Gate:** Vertrauenswürdigen ChatGPT-Site→Cloudflare-Identitätsaussteller plus Owner-/Device-Bindung konzipieren und autorisiert bereitstellen, den echten Durable-Object-Namespace ohne laufende Zusatzkosten freigeben, danach iPhone-Client `pending→claim→ack` anschließen und mit exaktem Controller-Chat + echter freigegebener zweiter Webseite testen. Deployment/Merge/Installationen erst nach konkreter Nutzerentscheidung. Die Root-Dateien und Claudes produktiver Cloudflare-`ondo-relay` bleiben außer Reichweite dieses Arbeitsbranches.
+
+---
+
 # ONDO Mobile – eigenständiger Cloudflare-Kanal (Stage 0)
 
 Dieses isolierte Worker-Projekt liegt bewusst **neben** dem produktiven `worker.js` des
