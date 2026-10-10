@@ -4,5 +4,23 @@
   "main": "worker.mjs",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
-  "observability": { "enabled": false }
+  "observability": {
+    "enabled": false
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "P3_SESSIONS",
+        "class_name": "P3Session"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "p3-sqlite-v1",
+      "new_sqlite_classes": [
+        "P3Session"
+      ]
+    }
+  ]
 }
