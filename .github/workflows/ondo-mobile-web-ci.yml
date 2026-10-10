@@ -34,3 +34,4 @@ jobs:
           node mobile-web/p3/build_scriptable_device.cjs
           node --check mobile-web/p3/device_client_scriptable.js
           node --test mobile-web/p3/scriptable_smoke.test.cjs
+          node --test mobile-web/p3/config_contract.test.cjs
