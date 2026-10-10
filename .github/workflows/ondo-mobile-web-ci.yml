@@ -29,3 +29,5 @@ jobs:
           node --check mobile-web/p3/endpoint_bridge.mjs
           node --check mobile-web/p3/transport.mjs
           node --test mobile-web/p3/transport.test.mjs
+          node --check mobile-web/p3/device_client.mjs
+          node --test mobile-web/p3/device_client.test.mjs
