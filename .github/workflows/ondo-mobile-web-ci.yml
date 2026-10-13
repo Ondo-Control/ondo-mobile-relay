@@ -31,6 +31,8 @@ jobs:
           node --test mobile-web/p3/transport.test.mjs
           node --check mobile-web/p3/p3_mcp_bridge.mjs
           node --test mobile-web/p3/p3_mcp_bridge.test.mjs
+          node --check mobile-web/p3/p3_mcp_integration.test.mjs
+          node --test mobile-web/p3/p3_mcp_integration.test.mjs
           node --check mobile-web/p3/device_client.mjs
           node --test mobile-web/p3/device_client.test.mjs
           node mobile-web/p3/build_scriptable_device.cjs
