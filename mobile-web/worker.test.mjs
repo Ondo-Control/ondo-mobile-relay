@@ -57,3 +57,15 @@ test('site never tries network, and exposure stays disabled',async()=>{
   assert.equal((await rpc('tools/call',{name:'ondo_mobile_transport_info',arguments:{}})).body.result.structuredContent.actions_enabled,false);
  }finally{globalThis.fetch=original;}
 });
+
+test('P3 model MCP tools never appear without independently verified model attestation',async()=>{
+ const env={P3_IDENTITY_PUBLIC_JWK:'not-a-valid-key',P3_SESSIONS:{}};
+ const request=new Request(url+'/mcp',{method:'POST',headers:{'content-type':'application/json'},
+  body:JSON.stringify({jsonrpc:'2.0',id:17,method:'tools/list',params:{}})});
+ const list=await (await worker.fetch(request,env)).json();
+ assert.deepEqual(list.result.tools.map(t=>t.name),['ondo_mobile_transport_info']);
+ const denied=await worker.fetch(new Request(url+'/mcp',{method:'POST',
+  headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:18,method:'tools/call',
+   params:{name:'ondo_p3_state',arguments:{after:0}}})}),env);
+ assert.equal((await denied.json()).result.structuredContent.reason,'attestation_required');
+});
