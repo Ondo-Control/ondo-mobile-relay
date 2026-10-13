@@ -18,11 +18,11 @@ test('standalone web page is real HTML with independent same-origin health route
  const b=await health.json();assert.equal(b.schema,'ONDO_MOBILE_WEB_V1');
  assert.equal(b.device_access,false);assert.equal(b.actions_enabled,false);assert.equal(b.live_events,false);
 });
-test('MCP only exposes harmless transport info, no device or action tools',async()=>{
+test('MCP advertises P3 schemas but rejects unauthenticated device/action calls',async()=>{
  const init=(await rpc('initialize',{protocolVersion:'2025-06-18'})).body.result;
  assert.equal(init.serverInfo.name,'ondo-mobile-web');
  const list=(await rpc('tools/list',{})).body.result.tools;
- assert.deepEqual(list.map(x=>x.name),['ondo_mobile_transport_info']);
+ assert.deepEqual(list.map(x=>x.name),['ondo_mobile_transport_info','ondo_p3_state','ondo_p3_offer','ondo_p3_status']);
  assert.equal(list[0].annotations.readOnlyHint,true);
  const b=(await rpc('tools/call',{name:'ondo_mobile_transport_info',arguments:{}})).body.result;
  assert.equal(b.structuredContent.device_access,false);assert.equal(b.structuredContent.relay_connected,false);
@@ -58,12 +58,12 @@ test('site never tries network, and exposure stays disabled',async()=>{
  }finally{globalThis.fetch=original;}
 });
 
-test('P3 model MCP tools never appear without independently verified model attestation',async()=>{
+test('P3 model schemas are discoverable but execution requires independently verified model attestation',async()=>{
  const env={P3_IDENTITY_PUBLIC_JWK:'not-a-valid-key',P3_SESSIONS:{}};
  const request=new Request(url+'/mcp',{method:'POST',headers:{'content-type':'application/json'},
   body:JSON.stringify({jsonrpc:'2.0',id:17,method:'tools/list',params:{}})});
  const list=await (await worker.fetch(request,env)).json();
- assert.deepEqual(list.result.tools.map(t=>t.name),['ondo_mobile_transport_info']);
+ assert.deepEqual(list.result.tools.map(t=>t.name),['ondo_mobile_transport_info','ondo_p3_state','ondo_p3_offer','ondo_p3_status']);
  const denied=await worker.fetch(new Request(url+'/mcp',{method:'POST',
   headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:18,method:'tools/call',
    params:{name:'ondo_p3_state',arguments:{after:0}}})}),env);

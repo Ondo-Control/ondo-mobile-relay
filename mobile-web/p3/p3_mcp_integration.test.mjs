@@ -38,9 +38,9 @@ test('authenticated native model gateway is reachable through existing MCP, with
  };
  const model=await issue('model'),device=await issue('device');
  const anonymous=await mcp('tools/list',{});
- assert.deepEqual(anonymous.result.tools.map(t=>t.name),['ondo_mobile_transport_info']);
+ assert.deepEqual(anonymous.result.tools.map(t=>t.name),['ondo_mobile_transport_info','ondo_p3_state','ondo_p3_offer','ondo_p3_status']);
  const deviceList=await mcp('tools/list',{},device);
- assert.deepEqual(deviceList.result.tools.map(t=>t.name),['ondo_mobile_transport_info']);
+ assert.deepEqual(deviceList.result.tools.map(t=>t.name),['ondo_mobile_transport_info','ondo_p3_state','ondo_p3_offer','ondo_p3_status']);
  const modelList=await mcp('tools/list',{},model);
  assert.deepEqual(modelList.result.tools.map(t=>t.name),['ondo_mobile_transport_info','ondo_p3_state','ondo_p3_offer','ondo_p3_status']);
  assert.equal((await api('phone','begin',{},device)).ok,true);

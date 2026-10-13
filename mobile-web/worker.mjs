@@ -57,7 +57,9 @@ async function mcp(request,env){
    result={};break;
   case 'tools/list':
    if(!empty(params))return response(fail(id,-32602,'No arguments allowed'));
-   result={tools:[TOOL,...((env?.P3_IDENTITY_PUBLIC_JWK&&env?.P3_SESSIONS&&(await verifyAttestation(request,env))?.role==='model')?P3_MCP_TOOLS:[])]};break;
+   // MCP discovery is not authorization: advertise schema so ChatGPT can bind tools.
+   // All P3 calls independently require a signed model identity and provisioned storage.
+   result={tools:[TOOL,...P3_MCP_TOOLS]};break;
   case 'tools/call':
    if(!validObject(params)||typeof params.name!=='string'||
     Object.keys(params).some(k=>!['name','arguments','_meta'].includes(k)))
