@@ -363,6 +363,8 @@ var PHONE_FRESH_MS = 4e4;
 var SLEEP_GRACE_MS = 18e5;
 // 0.6.11: on a seat key (the phone says so in its poll) replies and logouts of the AI live 15 minutes instead of 150 s
 var SEAT_JOB_TTL_MS = 9e5;
+var WAKE_MIN_MS = 6e4;
+var JOURNAL_TTL_MS = 36e5;
 var SAVE_PHONE_MS = 6e4;
 var KEY_RE = /^[A-Za-z0-9_-]{24,128}$/;
 var INSTRUCTIONS = "ONDO bedient live das iPhone des Nutzers. Rufe zuerst ondo_start auf: Du bekommst Auftrag, Ziele und Regeln. Danach handelst du selbst mit den ondo_*-Werkzeugen und beendest mit ondo_end.";
@@ -376,7 +378,7 @@ var sleep = /* @__PURE__ */ __name((ms) => new Promise((r) => setTimeout(r, ms))
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const m = /^\/k\/([^/]+)\/(mcp|phone\/poll|phone\/result|phone\/revoke)\/?$/.exec(url.pathname);
+    const m = /^\/k\/([^/]+)\/(mcp|phone\/poll|phone\/result|phone\/revoke|exec\/journal)\/?$/.exec(url.pathname);
     if (!m) {
       if (url.pathname === "/" || url.pathname === "/health") return new Response("ONDO Relay laeuft.\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
       return new Response("not found", { status: 404 });
@@ -405,13 +407,16 @@ var Hub = class {
     this.lastAlarm = 0;
     this.seatKey = false;
     this.savedPhoneAt = 0;
+    this.wakeUrl = "";
+    this.lastWake = 0;
     state.blockConcurrencyWhile(async () => {
       try {
-        const m = await state.storage.get(["q", "revoked", "lp", "seat"]);
+        const m = await state.storage.get(["q", "revoked", "lp", "seat", "wk"]);
         this.revoked = m.get("revoked") === true;
         this.lastPhone = Number(m.get("lp")) || 0;
         this.savedPhoneAt = this.lastPhone;
         this.seatKey = m.get("seat") === true;
+        this.wakeUrl = typeof m.get("wk") === "string" ? m.get("wk") : "";
         const q = m.get("q");
         if (q && typeof q === "object") {
           this.jobs = Array.isArray(q.jobs) ? q.jobs : [];
@@ -491,6 +496,7 @@ var Hub = class {
     if (path === "/mcp") return this.mcp(request);
     if (path === "/phone/poll") return this.phonePoll(request);
     if (path === "/phone/result") return this.phoneResult(request);
+    if (path === "/exec/journal") return this.journal(request);
     return new Response("not found", { status: 404 });
   }
   // ---------------- MCP (Streamable HTTP, JSON responses) ----------------
@@ -561,6 +567,7 @@ var Hub = class {
     this.jobs.push(job);
     this.persist();
     this.wakePoll();
+    if (asleep) this.pingWake();
     const r = await Promise.race([result, sleep(CALL_MAX_MS).then(() => null)]);
     this.waiters.delete(job.id);
     let out;
@@ -588,6 +595,46 @@ var Hub = class {
       p.resolve();
     }
   }
+  // wake the replaceable executor (e.g. a sleeping free web service) with one plain GET; answer is ignored, at most once per minute
+  pingWake() {
+    const now = Date.now();
+    if (!this.wakeUrl || now - this.lastWake < WAKE_MIN_MS) return;
+    this.lastWake = now;
+    try {
+      fetch(this.wakeUrl, { method: "GET", headers: { "user-agent": "ondo-relay-wake" } }).catch(() => {
+      });
+    } catch (e) {
+    }
+  }
+  // journal for the executor: "intent" before a risky action, "done" after; survives executor restarts, so nothing runs twice
+  async journal(request) {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let b = null;
+    try {
+      b = await request.json();
+    } catch (e) {
+    }
+    if (!b || typeof b.id !== "string" || b.id.length > 80 || !/^(get|intent|done)$/.test(String(b.act))) return json({ ok: false }, 400);
+    const key = "jr:" + b.id, now = Date.now();
+    let cur = null;
+    try {
+      cur = await this.state.storage.get(key);
+    } catch (e) {
+    }
+    if (cur && now - cur.at > JOURNAL_TTL_MS) cur = null;
+    if (b.act === "get") return json({ ok: true, entry: cur || null });
+    const val = JSON.stringify(b.val === void 0 ? null : b.val);
+    if (val.length > 20000) return json({ ok: false, reason: "too_large" }, 413);
+    const next = b.act === "intent" ? { at: cur ? cur.at : now, intent: b.val === void 0 ? true : b.val, done: cur ? cur.done : void 0 } : { at: cur ? cur.at : now, intent: cur ? cur.intent : void 0, done: b.val === void 0 ? true : b.val };
+    try {
+      await this.state.storage.put(key, next);
+      this.state.storage.setAlarm(now + IDLE_CLEAN_MS).catch(() => {
+      });
+    } catch (e) {
+      return json({ ok: false }, 500);
+    }
+    return json({ ok: true, entry: next });
+  }
   async phonePoll(request) {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
     let body = {};
@@ -600,6 +647,14 @@ var Hub = class {
       this.seatKey = true;
       try {
         this.state.storage.put("seat", true).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
+    if (body && typeof body.wake === "string" && body.wake !== this.wakeUrl && /^https:\/\/[^\s]{4,300}$/.test(body.wake)) {
+      this.wakeUrl = body.wake;
+      try {
+        this.state.storage.put("wk", body.wake).catch(() => {
         });
       } catch (e) {
       }

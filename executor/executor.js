@@ -27,7 +27,8 @@ async function getPage(name) {
   if (!TARGETS[name]) return null;
   if (!browser) {
     const lean = process.env.LEAN === "1";
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-zygote", "--js-flags=--max-old-space-size=192"].concat(lean ? ["--in-process-gpu", "--disable-software-rasterizer", "--renderer-process-limit=1", "--disable-extensions", "--disable-background-networking", "--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter"] : []) });
+    const mk = (sb) => chromium.launch({ args: (sb ? [] : ["--no-sandbox"]).concat(["--disable-gpu", "--disable-dev-shm-usage", "--no-zygote", "--js-flags=--max-old-space-size=192"].concat(lean ? ["--in-process-gpu", "--disable-software-rasterizer", "--renderer-process-limit=1", "--disable-extensions", "--disable-background-networking", "--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter"] : [])) });
+    try { browser = await mk(process.env.NO_SANDBOX !== "1"); } catch (e) { console.error("Sandbox-Start fehlgeschlagen, Rueckfall ohne Sandbox:", String(e.message||e).slice(0,100)); browser = await mk(false); }
   }
   if (!pages[name]) {
     const ctx = await browser.newContext({ viewport: { width: 800, height: 900 } });
@@ -84,14 +85,18 @@ async function handle(job) {
   } catch (e) { return { ok: false, reason: "action_failed", detail: String(e.message || e).slice(0, 200) }; }
 }
 // Wiederzustellung: nie eine ausloesende Aktion blind wiederholen
+// Journal im Relay (JOURNAL_REMOTE=1): ueberlebt Neustarts und Wechsel des Ausfuehrers. Nicht erreichbar -> Auftrag wird nicht angefasst, Relay liefert ihn erneut.
+const REMOTE = process.env.JOURNAL_REMOTE === "1";
+async function jrnl(act, id, val) { const r = await post("/exec/journal", { act, id, val }, 15000); if (!r || r.ok !== true) throw new Error("journal_unreachable"); return r.entry; }
 async function processJob(job) {
-  if (J.done[job.id]) return J.done[job.id];
-  if (TRIGGER[job.op] && J.intent[job.id]) { const r = { ok: false, reason: "outcome_unclear", hint: "Aktion war schon begonnen, Ausgang unklar. Seite mit ondo_observe pruefen, nicht blind wiederholen." }; J.done[job.id] = r; delete J.intent[job.id]; saveJ(); return r; }
-  if (TRIGGER[job.op]) { J.intent[job.id] = { op: job.op, at: Date.now() }; saveJ(); }
+  let e = REMOTE ? await jrnl("get", job.id) : { done: J.done[job.id], intent: J.intent[job.id] };
+  if (e && e.done !== undefined) return e.done;
+  if (TRIGGER[job.op] && e && e.intent !== undefined) { const r = { ok: false, reason: "outcome_unclear", hint: "Aktion war schon begonnen, Ausgang unklar. Seite mit ondo_observe pruefen, nicht blind wiederholen." }; if (REMOTE) await jrnl("done", job.id, r); else { J.done[job.id] = r; delete J.intent[job.id]; saveJ(); } return r; }
+  if (TRIGGER[job.op]) { if (REMOTE) await jrnl("intent", job.id, { op: job.op }); else { J.intent[job.id] = { op: job.op, at: Date.now() }; saveJ(); } }
   if (process.env.TEST_CRASH === 'after_intent' && TRIGGER[job.op]) process.kill(process.pid, 'SIGKILL');
   const r = await handle(job);
   if (process.env.TEST_CRASH === 'after_action' && TRIGGER[job.op]) process.kill(process.pid, 'SIGKILL');
-  J.done[job.id] = r; delete J.intent[job.id]; saveJ();
+  if (REMOTE) await jrnl("done", job.id, r); else { J.done[job.id] = r; delete J.intent[job.id]; saveJ(); }
   if (process.env.TEST_CRASH === 'after_done' && TRIGGER[job.op]) process.kill(process.pid, 'SIGKILL');
   return r;
 }
@@ -104,11 +109,11 @@ async function loop() {
   console.log("Ausfuehrer laeuft, Relay:", RELAY);
   while (!stopping) {
     try {
-      const r = await post("/phone/poll", { wait_ms: WAIT_MS, ack: acks.splice(0) });
+      const r = await post("/phone/poll", Object.assign({ wait_ms: WAIT_MS, ack: acks.splice(0) }, process.env.WAKE_URL ? { wake: process.env.WAKE_URL } : {}));
       for (const job of r.jobs || []) {
-        acks.push(job.id);
         const res = await processJob(job);
         await post("/phone/result", { id: job.id, result: res }, 20000).catch(() => {});
+        acks.push(job.id);
       }
     } catch (e) { console.error("poll:", String(e.message || e).slice(0, 120)); await new Promise((r) => setTimeout(r, 2000)); }
   }
