@@ -359,6 +359,11 @@ var MAX_MCP_BYTES = 2e5;
 var MAX_PHONE_BYTES = 2e6;
 var IDLE_CLEAN_MS = 24 * 3600 * 1e3;
 var PHONE_FRESH_MS = 4e4;
+// 0.6.11: a phone that polled within the last 30 minutes is "asleep" (iOS paused the app), not "gone": calls are queued instead of refused
+var SLEEP_GRACE_MS = 18e5;
+// 0.6.11: on a seat key (the phone says so in its poll) replies and logouts of the AI live 15 minutes instead of 150 s
+var SEAT_JOB_TTL_MS = 9e5;
+var SAVE_PHONE_MS = 6e4;
 var KEY_RE = /^[A-Za-z0-9_-]{24,128}$/;
 var INSTRUCTIONS = "ONDO bedient live das iPhone des Nutzers. Rufe zuerst ondo_start auf: Du bekommst Auftrag, Ziele und Regeln. Danach handelst du selbst mit den ondo_*-Werkzeugen und beendest mit ondo_end.";
 function json(body, status, extra) {
@@ -398,10 +403,15 @@ var Hub = class {
     this.seq = 0;
     this.revoked = false;
     this.lastAlarm = 0;
+    this.seatKey = false;
+    this.savedPhoneAt = 0;
     state.blockConcurrencyWhile(async () => {
       try {
-        const m = await state.storage.get(["q", "revoked"]);
+        const m = await state.storage.get(["q", "revoked", "lp", "seat"]);
         this.revoked = m.get("revoked") === true;
+        this.lastPhone = Number(m.get("lp")) || 0;
+        this.savedPhoneAt = this.lastPhone;
+        this.seatKey = m.get("seat") === true;
         const q = m.get("q");
         if (q && typeof q === "object") {
           this.jobs = Array.isArray(q.jobs) ? q.jobs : [];
@@ -416,6 +426,17 @@ var Hub = class {
   persist() {
     try {
       this.state.storage.put("q", { jobs: this.jobs, inflight: [...this.inflight.values()].map((e) => e.job), orphans: this.orphans, seq: this.seq }).catch(() => {
+      });
+    } catch (e) {
+    }
+  }
+  markPhone() {
+    const now = Date.now();
+    this.lastPhone = now;
+    if (now - this.savedPhoneAt < SAVE_PHONE_MS) return;
+    this.savedPhoneAt = now;
+    try {
+      this.state.storage.put("lp", now).catch(() => {
       });
     } catch (e) {
     }
@@ -521,7 +542,8 @@ var Hub = class {
   async callTool(p) {
     const tool = TOOLS.filter((t) => t.name === p.name)[0];
     if (!tool) return { isError: true, content: [{ type: "text", text: "Unbekanntes Werkzeug: " + String(p.name).slice(0, 40) }] };
-    if (!this.phoneConnected()) {
+    const asleep = !this.phoneConnected();
+    if (asleep && !(this.lastPhone && Date.now() - this.lastPhone < SLEEP_GRACE_MS)) {
       return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, reason: "phone_not_connected", hint: "ONDO ist auf dem iPhone gerade nicht verbunden. Der Nutzer muss ONDO oeffnen und eine Sitzung mit 'KI per Connector' starten. Sag ihm das und versuche es danach noch einmal." }) }] };
     }
     if (this.jobs.length + this.inflight.size >= MAX_QUEUE) return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, reason: "too_many_open_calls", hint: "Es sind schon viele Aufrufe offen. Warte mit ondo_wait auf Ergebnisse, bevor du weitere sendest." }) }] };
@@ -530,13 +552,20 @@ var Hub = class {
       this.waiters.set(job.id, resolve);
     });
     job.born = Date.now();
+    if (this.seatKey && (tool.op === "send" || tool.op === "end")) job.ttl = SEAT_JOB_TTL_MS;
+    if (asleep && (tool.op === "wait" || tool.op === "read" || tool.op === "observe" || tool.op === "watch" || tool.name === "ondo_start")) {
+      // the AI asks again and again while the phone sleeps (also ondo_start: two queued starts would take two seats): only the newest identical call stays queued
+      const same = JSON.stringify(job.args);
+      this.jobs = this.jobs.filter((x) => !(x.tool === job.tool && JSON.stringify(x.args) === same));
+    }
     this.jobs.push(job);
     this.persist();
     this.wakePoll();
     const r = await Promise.race([result, sleep(CALL_MAX_MS).then(() => null)]);
     this.waiters.delete(job.id);
     let out;
-    if (r === null) out = { ok: true, pending: true, hint: "Das iPhone antwortet noch (ist ONDO auf dem iPhone im Vordergrund und der Bildschirm an?). Sag das dem Nutzer und rufe ondo_wait auf, um das Ergebnis zu holen." };
+    if (r === null && !this.phoneConnected()) out = { ok: true, pending: true, reason: "phone_sleeping", hint: "Das iPhone schläft gerade (ONDO ist im Hintergrund oder der Bildschirm ist aus). Die Sitzung besteht fort; dein Aufruf wartet im Relay und wird ausgeführt, sobald ONDO wieder offen ist. Rufe das Werkzeug in Kürze noch einmal auf und beende die Arbeit NICHT. Sag dem Nutzer nur kurz, dass ONDO im Vordergrund sein muss." };
+    else if (r === null) out = { ok: true, pending: true, hint: "Das iPhone antwortet noch (ist ONDO auf dem iPhone im Vordergrund und der Bildschirm an?). Sag das dem Nutzer und rufe ondo_wait auf, um das Ergebnis zu holen." };
     else out = r;
     if (this.orphans.length) {
       out = Object.assign({}, out, { earlier: this.orphans.splice(0, 5) });
@@ -566,7 +595,15 @@ var Hub = class {
       body = await request.json();
     } catch (e) {
     }
-    this.lastPhone = Date.now();
+    this.markPhone();
+    if (body && body.seat === true && !this.seatKey) {
+      this.seatKey = true;
+      try {
+        this.state.storage.put("seat", true).catch(() => {
+        });
+      } catch (e) {
+      }
+    }
     if (body && Array.isArray(body.ack) && body.ack.length) {
       for (const a of body.ack.slice(0, 50)) this.inflight.delete(String(a));
       this.persist();
@@ -589,17 +626,17 @@ var Hub = class {
           resolve();
         }, wait);
       });
-      this.pollOpen = false;
+      this.pollOpen = !!this.poll;
       jobs = this.takeJobs();
     }
-    this.lastPhone = Date.now();
+    this.markPhone();
     return json({ jobs, now: Date.now() });
   }
   // new jobs plus jobs handed out earlier but never confirmed; expired ones are dropped
   takeJobs() {
     const now = Date.now(), out = [];
-    this.jobs = this.jobs.filter((j) => now - j.born < JOB_TTL_MS);
-    for (const [id, e] of this.inflight) if (now - e.job.born >= JOB_TTL_MS) this.inflight.delete(id);
+    this.jobs = this.jobs.filter((j) => now - j.born < (j.ttl || JOB_TTL_MS));
+    for (const [id, e] of this.inflight) if (now - e.job.born >= (e.job.ttl || JOB_TTL_MS)) this.inflight.delete(id);
     for (const j of this.jobs.splice(0, this.jobs.length)) {
       this.inflight.set(j.id, { job: j, at: now });
       out.push(j);
@@ -618,7 +655,7 @@ var Hub = class {
       body = await request.json();
     } catch (e) {
     }
-    this.lastPhone = Date.now();
+    this.markPhone();
     if (!body || typeof body.id !== "string") return json({ ok: false }, 400);
     this.inflight.delete(body.id);
     this.persist();
