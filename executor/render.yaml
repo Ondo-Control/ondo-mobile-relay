@@ -1,0 +1,15 @@
+# Render Blueprint (Entwurf, nicht ausgerollt). Free-Web-Service mit Docker. Geheimnisse im Render-Dashboard setzen (sync: false).
+services:
+  - type: web
+    name: ondo-browser-executor
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: RELAY_URL
+        sync: false
+      - key: RELAY_KEY
+        sync: false
+      - key: TARGETS
+        sync: false

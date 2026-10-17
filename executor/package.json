@@ -1,0 +1,9 @@
+{
+  "name": "ondo-browser-executor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ONDO Browser-Ausfuehrer (Prototyp): Playwright/Chromium am Relay, ohne Telefon",
+  "main": "executor.js",
+  "scripts": { "start": "node executor.js" },
+  "dependencies": { "playwright": "1.56.0" }
+}

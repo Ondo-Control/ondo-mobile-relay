@@ -12,6 +12,8 @@ const TARGETS = JSON.parse(process.env.TARGETS || '{"testseite":"about:blank"}')
 const JOURNAL = process.env.JOURNAL || "/tmp/ondo-executor-journal.json";
 const ALLOW_LOCAL = process.env.ALLOW_LOCAL === "1";
 const WAIT_MS = 25000;
+// Health-Endpunkt: Render Free schlaeft nach 15 Min ohne EINGEHENDEN Verkehr; das Relay kann darueber wecken.
+if (process.env.PORT) require("http").createServer((q, s) => { s.writeHead(200, { "content-type": "text/plain" }); s.end("ok\n"); }).listen(+process.env.PORT);
 if (!RELAY || !KEY) { console.error("RELAY_URL und RELAY_KEY fehlen"); process.exit(2); }
 
 // ---- Journal: gespeicherte Auftraege (Ergebnis) und Absichten (vor einer ausloesenden Aktion) ----
