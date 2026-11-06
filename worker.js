@@ -334,6 +334,47 @@ var TOOLS = [
     }
   },
   {
+    "name": "ondo_diag",
+    "op": "diag",
+    "description": "Liest die Diagnose, die ONDO auf dem iPhone im Relay abgelegt hat (Sitzungsende, Fehler, Knopf). Funktioniert auch, wenn das iPhone schlaeft, und braucht keine Datei vom Nutzer. Ohne id: Liste der letzten Eintraege mit Kurzfassung. Mit id: Zusammenfassung und Teile des Eintrags. Mit id und part: ein Teil im Wortlaut (bis 60000 Zeichen, mit offset weiterlesen).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Eintrag aus der Liste"
+        },
+        "part": {
+          "type": "string",
+          "description": "Name eines Teils des Eintrags (steht unter parts)"
+        },
+        "offset": {
+          "type": "number",
+          "description": "Startzeichen im Teil, zum Weiterlesen"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ondo_app",
+    "op": "app",
+    "description": "Veroeffentlicht eine fertige Web-App (EINE HTML-Datei mit CSS und JavaScript, bis 150000 Zeichen) kostenlos unter einem Link. Der Nutzer oeffnet den Link in Safari und waehlt Teilen > Zum Home-Bildschirm; dann oeffnet sie sich wie eine App. Nur moeglich, wenn der Nutzer in ONDO fuer diesen Auftrag 'Web-Apps veroeffentlichen' erlaubt hat. action=publish (name, html, optional title, icon_png_base64), action=list, action=delete (name). Gleicher name ersetzt die App und behaelt den Link. Wichtig: keine Schluessel oder privaten Daten in die App schreiben, jeder mit dem Link kann sie oeffnen.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["publish", "list", "delete"] },
+        "name": { "type": "string", "description": "Kurzname, nur a-z, 0-9 und Bindestrich, bis 40 Zeichen" },
+        "html": { "type": "string", "description": "Die ganze App als eine HTML-Datei" },
+        "title": { "type": "string", "description": "Name unter dem Symbol auf dem Home-Bildschirm" },
+        "icon_png_base64": { "type": "string", "description": "Optional: Symbol als PNG (180x180), Base64, bis 40000 Zeichen" }
+      },
+      "required": ["action"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "ondo_end",
     "op": "end",
     "description": "Beendet die Sitzung, wenn der Auftrag erledigt ist. summary = dein Ergebnis fuer den Nutzer.",
@@ -367,6 +408,27 @@ var WAKE_MIN_MS = 6e4;
 var JOURNAL_TTL_MS = 36e5;
 var SAVE_PHONE_MS = 6e4;
 var KEY_RE = /^[A-Za-z0-9_-]{24,128}$/;
+// 0.6.75: Diagnose ohne Dateien. The phone (ONDO) files a content-free diagnosis here; the AI reads it with ondo_diag, also while the phone sleeps.
+var DIAG_KEEP = 12;
+var DIAG_TTL_MS = 7 * 864e5;
+var DIAG_PART_MAX = 6e4;
+var DIAG_ENTRY_MAX = 4e5;
+// 0.6.75 (Punkt 5): Web-Apps. The AI publishes one HTML file (ondo_app); it is served at /a/<pub>/<id>, where <pub> is a one-way hash of the key (the key itself never appears in a link).
+// Publishing needs the per-order permission the phone sets (phone/apps); the apps live in a second Durable Object named "pub:<pub>".
+var APP_MAX = 20;
+var APP_HTML_MAX = 15e4;
+var APP_ICON_MAX = 4e4;
+var APP_GRANT_MAX_H = 12;
+var htmlEsc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function appPage(html, base, title, icon) {
+  const t = htmlEsc(title);
+  const add = '<link rel="manifest" href="' + base + '/manifest.webmanifest"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="' + t + '">' + (icon ? '<link rel="apple-touch-icon" href="' + base + '/icon.png">' : "");
+  const m = /<head[^>]*>/i.exec(html);
+  return m ? html.slice(0, m.index + m[0].length) + add + html.slice(m.index + m[0].length) : "<!doctype html><head><meta charset=\"utf-8\">" + add + "</head>" + html;
+}
+function appHeaders(type) {
+  return { "content-type": type, "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "content-security-policy": "frame-ancestors 'none'" };
+}
 var INSTRUCTIONS = "ONDO bedient live das iPhone des Nutzers. Rufe zuerst ondo_start auf: Du bekommst Auftrag, Ziele und Regeln. Danach handelst du selbst mit den ondo_*-Werkzeugen und beendest mit ondo_end.";
 function json(body, status, extra) {
   return new Response(JSON.stringify(body), { status: status || 200, headers: Object.assign({ "content-type": "application/json", "cache-control": "no-store" }, extra || {}) });
@@ -378,7 +440,12 @@ var sleep = /* @__PURE__ */ __name((ms) => new Promise((r) => setTimeout(r, ms))
 var worker_default = {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const m = /^\/k\/([^/]+)\/(mcp|phone\/poll|phone\/result|phone\/revoke|exec\/journal)\/?$/.exec(url.pathname);
+    const m = /^\/k\/([^/]+)\/(mcp|phone\/poll|phone\/result|phone\/revoke|phone\/diag|phone\/apps|exec\/journal)\/?$/.exec(url.pathname);
+    const am = /^\/a\/([a-f0-9]{20})\/([a-z0-9]{10})(\/manifest\.webmanifest|\/icon\.png|\/)?$/.exec(url.pathname);
+    if (am) {
+      if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
+      return env.HUB.get(env.HUB.idFromName("pub:" + am[1])).fetch(request);
+    }
     if (!m) {
       if (url.pathname === "/" || url.pathname === "/health") return new Response("ONDO Relay laeuft.\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
       return new Response("not found", { status: 404 });
@@ -409,9 +476,14 @@ var Hub = class {
     this.savedPhoneAt = 0;
     this.wakeUrl = "";
     this.lastWake = 0;
+    this.pub = "";
+    this.appUntil = 0;
+    this.origin = "";
     state.blockConcurrencyWhile(async () => {
       try {
-        const m = await state.storage.get(["q", "revoked", "lp", "seat", "wk"]);
+        const m = await state.storage.get(["q", "revoked", "lp", "seat", "wk", "pub", "ag"]);
+        this.pub = typeof m.get("pub") === "string" ? m.get("pub") : "";
+        this.appUntil = Number(m.get("ag")) || 0;
         this.revoked = m.get("revoked") === true;
         this.lastPhone = Number(m.get("lp")) || 0;
         this.savedPhoneAt = this.lastPhone;
@@ -469,9 +541,20 @@ var Hub = class {
       await this.state.storage.delete("q");
     } catch (e) {
     }
+    try {
+      const all = await this.state.storage.get("dgi"), keep = await this.diagIndex();
+      for (const x of Array.isArray(all) ? all : []) if (x && x.id && !keep.some((k) => k.id === x.id)) await this.state.storage.delete("dg:" + x.id);
+      await this.state.storage.put("dgi", keep);
+    } catch (e) {
+    }
   }
   async fetch(request) {
-    const path = new URL(request.url).pathname.replace(/^\/k\/[^/]+/, "").replace(/\/$/, "");
+    const rawPath = new URL(request.url).pathname;
+    if (rawPath.indexOf("/a/") === 0) return this.appServe(request);
+    if (rawPath.indexOf("/_app/") === 0) return this.appInternal(request);
+    const km = /^\/k\/([^/]+)/.exec(rawPath);
+    if (km && !this.revoked) await this.learnKey(km[1], new URL(request.url).origin);
+    const path = rawPath.replace(/^\/k\/[^/]+/, "").replace(/\/$/, "");
     if (path === "/phone/revoke") {
       if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
       this.revoked = true;
@@ -497,6 +580,8 @@ var Hub = class {
     if (path === "/phone/poll") return this.phonePoll(request);
     if (path === "/phone/result") return this.phoneResult(request);
     if (path === "/exec/journal") return this.journal(request);
+    if (path === "/phone/diag") return this.diagPut(request);
+    if (path === "/phone/apps") return this.appsPhone(request);
     return new Response("not found", { status: 404 });
   }
   // ---------------- MCP (Streamable HTTP, JSON responses) ----------------
@@ -548,6 +633,8 @@ var Hub = class {
   async callTool(p) {
     const tool = TOOLS.filter((t) => t.name === p.name)[0];
     if (!tool) return { isError: true, content: [{ type: "text", text: "Unbekanntes Werkzeug: " + String(p.name).slice(0, 40) }] };
+    if (tool.op === "app") return this.appTool(p.arguments && typeof p.arguments === "object" ? p.arguments : {});
+    if (tool.op === "diag") return this.diagTool(p.arguments && typeof p.arguments === "object" ? p.arguments : {});
     const asleep = !this.phoneConnected();
     if (asleep && !(this.lastPhone && Date.now() - this.lastPhone < SLEEP_GRACE_MS)) {
       return { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, reason: "phone_not_connected", hint: "ONDO ist auf dem iPhone gerade nicht verbunden. Der Nutzer muss ONDO oeffnen und eine Sitzung mit 'KI per Connector' starten. Sag ihm das und versuche es danach noch einmal." }) }] };
@@ -634,6 +721,232 @@ var Hub = class {
       return json({ ok: false }, 500);
     }
     return json({ ok: true, entry: next });
+  }
+  // ---------------- web apps (0.6.75, Punkt 5) ----------------
+  async learnKey(key, origin) {
+    if (origin) this.origin = origin;
+    if (this.pub) return;
+    try {
+      const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("ondo-pub:" + key)));
+      this.pub = Array.from(d).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 20);
+      await this.state.storage.put("pub", this.pub);
+    } catch (e) {
+    }
+  }
+  appStub() {
+    return this.env.HUB.get(this.env.HUB.idFromName("pub:" + this.pub));
+  }
+  async appCall(op, body) {
+    const r = await this.appStub().fetch(new Request("https://hub/_app/" + op, { method: "POST", body: JSON.stringify(body || {}) }));
+    let j = null;
+    try {
+      j = await r.json();
+    } catch (e) {
+    }
+    return j || { ok: false, reason: "no_answer" };
+  }
+  appUrl(id) {
+    return (this.origin || "") + "/a/" + this.pub + "/" + id + "/";
+  }
+  async appTool(a) {
+    const out = (o, isErr) => ({ isError: isErr || void 0, content: [{ type: "text", text: JSON.stringify(o) }] });
+    if (!this.pub) return out({ ok: false, reason: "not_ready", hint: "Der Nutzer muss ONDO einmal mit dem Relay verbinden." }, true);
+    const act = String(a.action || "list"), now = Date.now();
+    if (act === "list") {
+      const r = await this.appCall("list");
+      return out({ ok: true, granted: this.appUntil > now, apps: (r.apps || []).map((x) => ({ name: x.name, title: x.title, url: this.appUrl(x.id), chars: x.chars, at: new Date(x.at).toISOString() })) });
+    }
+    if (act === "delete") {
+      const r = await this.appCall("delete", { name: String(a.name || "") });
+      return out(r, !r.ok);
+    }
+    if (act !== "publish") return out({ ok: false, reason: "bad_action" }, true);
+    if (!(this.appUntil > now)) return out({ ok: false, reason: "not_granted", hint: "Der Nutzer hat Web-Apps fuer diesen Auftrag nicht erlaubt. Sag ihm: in ONDO beim Start des Entwicklerraums den Haken 'Web-Apps veroeffentlichen' setzen. Du kannst die App bis dahin als Text liefern." }, true);
+    const r = await this.appCall("put", { name: a.name, html: a.html, title: a.title, icon: a.icon_png_base64 });
+    if (!r.ok) return out(r, true);
+    return out({ ok: true, name: r.name, url: this.appUrl(r.id), chars: r.chars, replaced: !!r.replaced, hint: "Sag dem Nutzer: Link in Safari oeffnen, dann Teilen > Zum Home-Bildschirm. Jeder mit dem Link kann die App oeffnen. Der Nutzer kann sie in ONDO unter Einstellungen > Web-Apps wieder loeschen." });
+  }
+  async appsPhone(request) {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let b = null;
+    try {
+      b = await request.json();
+    } catch (e) {
+    }
+    if (!b || typeof b.op !== "string") return json({ ok: false, reason: "bad_request" }, 400);
+    if (!this.pub) return json({ ok: false, reason: "not_ready" }, 503);
+    if (b.op === "grant") {
+      const h = Math.max(0.1, Math.min(Number(b.hours) || 8, APP_GRANT_MAX_H));
+      this.appUntil = Date.now() + h * 36e5;
+      try {
+        await this.state.storage.put("ag", this.appUntil);
+      } catch (e) {
+      }
+      return json({ ok: true, until: this.appUntil });
+    }
+    if (b.op === "revoke") {
+      this.appUntil = 0;
+      try {
+        await this.state.storage.put("ag", 0);
+      } catch (e) {
+      }
+      return json({ ok: true });
+    }
+    if (b.op === "list") {
+      const r = await this.appCall("list");
+      return json({ ok: true, granted: this.appUntil > Date.now(), until: this.appUntil, apps: (r.apps || []).map((x) => ({ name: x.name, title: x.title, url: this.appUrl(x.id), chars: x.chars, at: x.at })) });
+    }
+    if (b.op === "delete") return json(await this.appCall("delete", { name: String(b.name || "") }));
+    if (b.op === "delete_all") return json(await this.appCall("delete_all"));
+    return json({ ok: false, reason: "bad_op" }, 400);
+  }
+  // the second Durable Object ("pub:<pub>"): stores and serves the apps; reachable only through the Worker route /a/... and the stub of the key's own object
+  async appIndex() {
+    let ix = [];
+    try {
+      const v = await this.state.storage.get("api");
+      if (Array.isArray(v)) ix = v;
+    } catch (e) {
+    }
+    return ix;
+  }
+  async appInternal(request) {
+    const op = new URL(request.url).pathname.replace(/^\/_app\//, "");
+    let b = {};
+    try {
+      b = await request.json();
+    } catch (e) {
+    }
+    let ix = await this.appIndex();
+    if (op === "list") return json({ ok: true, apps: ix });
+    if (op === "delete") {
+      const x = ix.filter((q) => q.name === b.name)[0];
+      if (!x) return json({ ok: false, reason: "not_found", names: ix.map((q) => q.name) });
+      await this.state.storage.delete("ap:" + x.id);
+      await this.state.storage.put("api", ix.filter((q) => q.id !== x.id));
+      return json({ ok: true, deleted: x.name });
+    }
+    if (op === "delete_all") {
+      for (const x of ix) await this.state.storage.delete("ap:" + x.id);
+      await this.state.storage.put("api", []);
+      return json({ ok: true, deleted: ix.length });
+    }
+    if (op !== "put") return json({ ok: false, reason: "bad_op" }, 400);
+    const name = typeof b.name === "string" ? b.name : "", html = typeof b.html === "string" ? b.html : "";
+    if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)) return json({ ok: false, reason: "bad_name", hint: "name: a-z, 0-9, Bindestrich, 1 bis 40 Zeichen" });
+    if (html.length < 20) return json({ ok: false, reason: "no_html" });
+    if (html.length > APP_HTML_MAX) return json({ ok: false, reason: "too_large", max: APP_HTML_MAX });
+    let icon = "";
+    if (b.icon !== void 0 && b.icon !== null && b.icon !== "") {
+      if (typeof b.icon !== "string" || b.icon.length > APP_ICON_MAX || !/^[A-Za-z0-9+\/=]+$/.test(b.icon)) return json({ ok: false, reason: "icon_invalid" });
+      icon = b.icon;
+    }
+    let x = ix.filter((q) => q.name === name)[0];
+    const replaced = !!x;
+    if (!x) {
+      if (ix.length >= APP_MAX) return json({ ok: false, reason: "too_many", max: APP_MAX, names: ix.map((q) => q.name), hint: "Loesche zuerst eine App (action=delete)." });
+      const rnd = crypto.getRandomValues(new Uint8Array(10));
+      x = { id: Array.from(rnd).map((n) => "abcdefghijklmnopqrstuvwxyz0123456789"[n % 36]).join(""), name };
+    }
+    x.title = String(b.title || name).slice(0, 40);
+    x.at = Date.now();
+    x.chars = html.length;
+    x.icon = !!icon;
+    await this.state.storage.put("ap:" + x.id, { html, icon, title: x.title });
+    await this.state.storage.put("api", ix.filter((q) => q.id !== x.id).concat([x]));
+    return json({ ok: true, id: x.id, name, chars: x.chars, replaced });
+  }
+  async appServe(request) {
+    const m = /^\/a\/([a-f0-9]{20})\/([a-z0-9]{10})(\/manifest\.webmanifest|\/icon\.png|\/)?$/.exec(new URL(request.url).pathname);
+    if (!m) return new Response("not found", { status: 404 });
+    let rec = null;
+    try {
+      rec = await this.state.storage.get("ap:" + m[2]);
+    } catch (e) {
+    }
+    if (!rec || typeof rec.html !== "string") return new Response("not found", { status: 404, headers: appHeaders("text/plain; charset=utf-8") });
+    const base = "/a/" + m[1] + "/" + m[2];
+    if (m[3] === "/manifest.webmanifest") {
+      const mf = { name: rec.title, short_name: rec.title.slice(0, 12), start_url: base + "/", scope: base + "/", display: "standalone", background_color: "#ffffff", theme_color: "#ffffff" };
+      if (rec.icon) mf.icons = [{ src: base + "/icon.png", sizes: "180x180", type: "image/png" }];
+      return new Response(JSON.stringify(mf), { headers: appHeaders("application/manifest+json") });
+    }
+    if (m[3] === "/icon.png") {
+      if (!rec.icon) return new Response("not found", { status: 404 });
+      const bin = Uint8Array.from(atob(rec.icon), (c) => c.charCodeAt(0));
+      return new Response(bin, { headers: appHeaders("image/png") });
+    }
+    return new Response(appPage(rec.html, base, rec.title, !!rec.icon), { headers: appHeaders("text/html; charset=utf-8") });
+  }
+  // ---------------- diagnosis filed by the phone, read by the AI (0.6.75) ----------------
+  async diagIndex() {
+    let ix = [];
+    try {
+      const v = await this.state.storage.get("dgi");
+      if (Array.isArray(v)) ix = v;
+    } catch (e) {
+    }
+    const now = Date.now();
+    return ix.filter((x) => x && typeof x.id === "string" && now - x.at <= DIAG_TTL_MS);
+  }
+  async diagPut(request) {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let b = null;
+    try {
+      b = await request.json();
+    } catch (e) {
+    }
+    if (!b || typeof b.id !== "string" || !/^[A-Za-z0-9_.-]{1,48}$/.test(b.id) || !b.parts || typeof b.parts !== "object" || Array.isArray(b.parts)) return json({ ok: false, reason: "bad_request" }, 400);
+    const parts = {};
+    let total = 0, n = 0;
+    for (const k of Object.keys(b.parts)) {
+      if (!/^[A-Za-z0-9_.-]{1,32}$/.test(k) || ++n > 12) continue;
+      const t = typeof b.parts[k] === "string" ? b.parts[k] : JSON.stringify(b.parts[k]);
+      if (k.indexOf("img_") === 0 && (typeof b.parts[k] !== "string" || b.parts[k].length > DIAG_PART_MAX * 4 || !/^[A-Za-z0-9+\/=]+$/.test(b.parts[k]))) return json({ ok: false, reason: "image_invalid", part: k }, 413);
+      parts[k] = String(t).slice(0, DIAG_PART_MAX * 4);
+      total += parts[k].length;
+    }
+    if (!n) return json({ ok: false, reason: "no_parts" }, 400);
+    if (total > DIAG_ENTRY_MAX) return json({ ok: false, reason: "too_large" }, 413);
+    const now = Date.now();
+    const meta = { id: b.id, at: now, kind: String(b.kind || "report").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 24) || "report", title: String(b.title || "").slice(0, 160), sum: String(typeof b.sum === "string" ? b.sum : JSON.stringify(b.sum === void 0 ? "" : b.sum)).slice(0, 2000), parts: Object.keys(parts).map((k) => ({ name: k, chars: parts[k].length })) };
+    try {
+      let ix = (await this.diagIndex()).filter((x) => x.id !== b.id);
+      ix.unshift(meta);
+      const drop = ix.slice(DIAG_KEEP);
+      ix = ix.slice(0, DIAG_KEEP);
+      await this.state.storage.put("dg:" + b.id, { meta, parts });
+      await this.state.storage.put("dgi", ix);
+      for (const d of drop) await this.state.storage.delete("dg:" + d.id);
+      this.state.storage.setAlarm(now + IDLE_CLEAN_MS).catch(() => {
+      });
+    } catch (e) {
+      return json({ ok: false, reason: "storage" }, 500);
+    }
+    return json({ ok: true, id: b.id, parts: meta.parts.length, chars: total });
+  }
+  async diagTool(a) {
+    const out = (o, isErr) => ({ isError: isErr || void 0, content: [{ type: "text", text: JSON.stringify(o) }] });
+    const ix = await this.diagIndex();
+    if (!a.id) {
+      return out({ ok: true, count: ix.length, entries: ix.map((x) => ({ id: x.id, at: new Date(x.at).toISOString(), kind: x.kind, title: x.title, sum: x.sum, parts: x.parts.map((q) => q.name + ":" + q.chars) })), hint: ix.length ? "Mit id (und part) liest du weiter. Neueste zuerst." : "Noch nichts abgelegt. ONDO legt am Sitzungsende, bei Fehlern und auf Knopfdruck eine Diagnose ab; der Nutzer kann sie unter Einstellungen > Diagnose ans Relay senden." });
+    }
+    const id = String(a.id).slice(0, 48);
+    if (!ix.some((x) => x.id === id)) return out({ ok: false, reason: "not_found", ids: ix.map((x) => x.id) }, true);
+    let rec = null;
+    try {
+      rec = await this.state.storage.get("dg:" + id);
+    } catch (e) {
+    }
+    if (!rec || !rec.parts) return out({ ok: false, reason: "not_found" }, true);
+    if (!a.part) return out({ ok: true, id, at: new Date(rec.meta.at).toISOString(), kind: rec.meta.kind, title: rec.meta.title, sum: rec.meta.sum, parts: rec.meta.parts });
+    const part = String(a.part).slice(0, 32);
+    if (typeof rec.parts[part] !== "string") return out({ ok: false, reason: "part_not_found", parts: rec.meta.parts.map((q) => q.name) }, true);
+    if (part.indexOf("img_") === 0) {
+      return { content: [{ type: "image", data: rec.parts[part], mimeType: "image/jpeg" }, { type: "text", text: JSON.stringify({ ok: true, id, part, chars: rec.parts[part].length, info: rec.parts.info ? rec.parts.info.slice(0, 500) : null }) }] };
+    }
+    const off = Math.max(0, Math.floor(Number(a.offset) || 0)), t = rec.parts[part], chunk = t.slice(off, off + DIAG_PART_MAX);
+    return out({ ok: true, id, part, offset: off, chars: chunk.length, total: t.length, more: off + chunk.length < t.length ? off + chunk.length : null, text: chunk });
   }
   async phonePoll(request) {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
